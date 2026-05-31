@@ -78,6 +78,7 @@ module.exports = async (req, res) => {
     const aircraft = [...seen.values()].slice(0, cap).map(a => ({
       id: `AC-${a.hex}`,
       hex: a.hex,
+      cat: a.category || '',
       callsign: (a.flight || '').trim() || a.r || `AC-${a.hex.toUpperCase()}`,
       registration: a.r || 'N/A',
       model: a.t || 'N/A',

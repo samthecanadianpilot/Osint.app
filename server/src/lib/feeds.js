@@ -253,6 +253,7 @@ export class FeedsManager {
           return {
             id: `AC-${a.hex}`,
             callsign,
+            cat: a.category || '',
             registration: a.r || 'N/A',
             model: a.t || 'N/A',
             from: closestAir.code,
