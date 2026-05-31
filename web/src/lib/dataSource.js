@@ -8,6 +8,7 @@
 //
 // Both modes drive the exact same store actions.
 import { createWorld } from './simulator.js';
+import { startLive } from './liveSource.js';
 
 const WS_URL = import.meta.env.VITE_WS_URL; // e.g. ws://localhost:4000/ws
 
@@ -60,8 +61,9 @@ export function startDataSource(store) {
     }
   }
 
-  // Vercel / Remote production default to zero-server client simulation
-  return startSimulation(store);
+  // Vercel / Remote production → REAL live data via serverless functions
+  // (/api/aircraft from adsb.lol + /api/tle from Celestrak, propagated client-side).
+  return startLive(store);
 }
 
 // ── Path B: client-side simulation ──

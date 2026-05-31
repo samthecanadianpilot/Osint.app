@@ -183,105 +183,83 @@ export class FeedsManager {
     this.timers.push(propTimer);
   }
 
-  // ── FLIGHT TRACKING (OpenSky ADS-B API) ──
+  // ── FLIGHT TRACKING (adsb.lol community ADS-B network) ──
+  // Keyless and reliable, unlike OpenSky's rate-limited anonymous tier. We
+  // query several global hubs (250nm each) and merge for worldwide coverage.
   initFlights() {
-    const fetchOpenSky = async () => {
+    const fetchFlights = async () => {
       try {
-        this.store.pushEvent({ level: 'info', source: 'ADS-B', message: 'Scanning OpenSky Network transponders...' });
-        
-        // Fetch active commercial flights worldwide
-        const response = await fetch('https://opensky-network.org/api/states/all');
-        if (!response.ok) throw new Error(`OpenSky returned status ${response.status}`);
+        this.store.pushEvent({ level: 'info', source: 'ADS-B', message: 'Scanning ADS-B transponders across global hubs...' });
 
-        const data = await response.json();
-        if (!data.states || data.states.length === 0) return;
+        const results = await Promise.all(
+          AIRPORTS.map(a =>
+            fetch(`https://api.adsb.lol/v2/point/${a.lat}/${a.lng}/250`, {
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+              },
+            })
+              .then(r => (r.ok ? r.json() : { ac: [] }))
+              .catch(() => ({ ac: [] }))
+          )
+        );
 
-        // Parse and sort flights by speed/altitude to pick the most interesting ones
-        const interestingStates = data.states
-          .filter(s => s[5] !== null && s[6] !== null && s[8] === false) // Must have coordinates and be airborne
-          .slice(0, 45); // Take a subset of active flights to populate the visualization perfectly
+        // Merge unique airborne aircraft by ICAO hex.
+        const seen = new Map();
+        for (const res of results) {
+          for (const a of res.ac || []) {
+            if (!a.hex || typeof a.lat !== 'number' || typeof a.lon !== 'number') continue;
+            if (typeof a.alt_baro !== 'number' || a.alt_baro <= 0) continue; // airborne only
+            if (!seen.has(a.hex)) seen.set(a.hex, a);
+          }
+        }
 
-        const mappedAircraft = interestingStates.map(state => {
-          const [
-            icao24,
-            callsignRaw,
-            originCountry,
-            timePosition,
-            lastContact,
-            lng,
-            lat,
-            baroAltitude,
-            onGround,
-            velocity,
-            trueTrack,
-            verticalRate,
-            sensors,
-            geoAltitude,
-            squawk,
-            spi,
-            positionSource
-          ] = state;
+        const list = [...seen.values()].slice(0, 70);
+        if (list.length === 0) return;
 
-          const callsign = (callsignRaw || '').trim() || `FLIGHT-${icao24.toUpperCase()}`;
-          const speed = velocity ? velocity * 1.94384 : 450; // m/s to knots
-          const altMeters = baroAltitude || geoAltitude || 10000;
-          const altitude = altMeters * 3.28084; // meters to feet
+        const mappedAircraft = list.map(a => {
+          const lat = a.lat, lng = a.lon;
+          const callsign = (a.flight || '').trim() || a.r || `AC-${a.hex.toUpperCase()}`;
 
-          // Deterministic aircraft models based on callsign/icao
-          const models = ['B738', 'A320', 'B77W', 'A359', 'B789', 'A388', 'B748'];
-          const model = models[Math.abs(hashString(icao24)) % models.length];
-
-          // Compute closest airport as 'from' and standard route to another international hub
-          let closestAir = AIRPORTS[0];
-          let minDist = Infinity;
+          // Closest hub = 'from'; deterministic hub = 'to' (for the route arc).
+          let closestAir = AIRPORTS[0], minDist = Infinity;
           for (const air of AIRPORTS) {
-            const d = Math.pow(air.lat - lat, 2) + Math.pow(air.lng - lng, 2);
-            if (d < minDist) {
-              minDist = d;
-              closestAir = air;
-            }
+            const d = (air.lat - lat) ** 2 + (air.lng - lng) ** 2;
+            if (d < minDist) { minDist = d; closestAir = air; }
           }
-
-          const fromCode = closestAir.code;
-          // Determine a logical destination hub based on heading
-          const destIdx = Math.abs(hashString(icao24) + 5) % AIRPORTS.length;
+          const destIdx = Math.abs(hashString(a.hex)) % AIRPORTS.length;
           let destAir = AIRPORTS[destIdx];
-          if (destAir.code === fromCode) {
-            destAir = AIRPORTS[(destIdx + 1) % AIRPORTS.length];
-          }
-          const toCode = destAir.code;
+          if (destAir.code === closestAir.code) destAir = AIRPORTS[(destIdx + 1) % AIRPORTS.length];
 
           return {
-            id: `AC-${icao24}`,
+            id: `AC-${a.hex}`,
             callsign,
-            registration: `G-${icao24.slice(0, 4).toUpperCase()}`,
-            model,
-            from: fromCode,
-            to: toCode,
-            route: [ [closestAir.lng, closestAir.lat], [destAir.lng, destAir.lat] ],
-            lat,
-            lng,
-            altitude,
-            speed,
-            heading: trueTrack || 90,
-            squawk: squawk || '2000',
+            registration: a.r || 'N/A',
+            model: a.t || 'N/A',
+            from: closestAir.code,
+            to: destAir.code,
+            route: [[closestAir.lng, closestAir.lat], [destAir.lng, destAir.lat]],
+            lat, lng,
+            altitude: a.alt_baro,                       // feet
+            speed: typeof a.gs === 'number' ? a.gs : 0, // knots
+            heading: a.track ?? a.true_heading ?? 90,
+            squawk: a.squawk || '0000',
             source: 'ADS-B',
-            type: 'aircraft'
+            type: 'aircraft',
           };
         });
 
         this.store.updateTracks(mappedAircraft);
-        this.store.pushEvent({ level: 'track', source: 'ADS-B', message: `Refreshed flight vectors: tracked ${mappedAircraft.length} active aircraft.` });
+        this.store.pushEvent({ level: 'track', source: 'ADS-B', message: `Refreshed flight vectors: ${mappedAircraft.length} live aircraft tracked.` });
       } catch (err) {
-        console.error('OpenSky API fetch error:', err.message);
-        this.store.pushEvent({ level: 'alert', source: 'ADS-B', message: 'Failed to update flight vectors: OpenSky API rate-limit.' });
+        console.error('ADS-B fetch error:', err.message);
+        this.store.pushEvent({ level: 'alert', source: 'ADS-B', message: 'Flight feed error; will retry.' });
       }
     };
 
-    // OpenSky imposes strict rate limits. We query every 30 seconds.
-    // Client-side great-circle updates will keep motion smooth between updates.
-    fetchOpenSky();
-    const flightTimer = setInterval(fetchOpenSky, 30000);
+    // Smooth great-circle motion (store.step) fills the gaps between polls.
+    fetchFlights();
+    const flightTimer = setInterval(fetchFlights, 20000);
     this.timers.push(flightTimer);
   }
 

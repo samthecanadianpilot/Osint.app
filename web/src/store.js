@@ -40,6 +40,13 @@ export const useStore = create((set, get) => ({
     set(state => ({ filters: { ...state.filters, [type]: !state.filters[type] } })),
 
   setConnected: connected => set({ connected }),
+
+  // Replace the full track set (live source owns the authoritative list —
+  // this also drops tracks that have aged out, which applyPositions can't).
+  setTracks: tracks =>
+    set({ tracks, byId: Object.fromEntries(tracks.map(t => [t.id, t])) }),
+
+  setArcs: arcs => set({ arcs }),
 }));
 
 // ── selectors ──
