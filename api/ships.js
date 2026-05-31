@@ -67,7 +67,7 @@ module.exports = async (req, res) => {
         source: 'AIS',
         type: 'ship',
       });
-      if (ships.length >= 45) break;
+      if (ships.length >= 400) break;
     }
 
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');

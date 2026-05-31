@@ -52,8 +52,10 @@ export function startLive(store) {
   });
   s().setConnected(true);
 
+  // Cap arcs hard — thousands of points are fine, but thousands of animated
+  // arcs are not. Show a representative few; the selection ring marks focus.
   function refreshArcs() {
-    s().setArcs(computeArcs([...aircraft, ...ships]));
+    s().setArcs(computeArcs([...ships]).slice(0, 40));
   }
 
   async function loadAircraft() {
@@ -82,7 +84,7 @@ export function startLive(store) {
 
   async function loadSats() {
     try {
-      const r = await fetch('/api/tle');
+      const r = await fetch('/api/tle?cap=1500');
       const j = await r.json();
       sats = (j.satellites || []).map(d => ({
         id: d.id, name: d.name, noradId: d.noradId,
@@ -114,6 +116,7 @@ export function startLive(store) {
         let lng = satellite.degreesLong(gd.longitude);
         lng = ((lng + 180) % 360) - 180;
         const lat = satellite.degreesLat(gd.latitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
         const vel = pv.velocity
           ? Math.sqrt(pv.velocity.x ** 2 + pv.velocity.y ** 2 + pv.velocity.z ** 2)
           : 7.6;

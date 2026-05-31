@@ -12,7 +12,7 @@ function altOf(t) {
   }
 }
 function radiusOf(t) {
-  return t.type === 'satellite' ? 0.32 : t.type === 'aircraft' ? 0.28 : 0.24;
+  return t.type === 'satellite' ? 0.18 : t.type === 'aircraft' ? 0.16 : 0.16;
 }
 
 // Public-domain Earth textures (shipped with three-globe). Night-lights keeps
@@ -98,6 +98,7 @@ export default function GlobeView() {
           pointColor="color"
           pointAltitude={altOf}
           pointRadius={radiusOf}
+          pointResolution={6}
           pointsMerge={false}
           pointLabel={t => `${t.callsign || t.name} · ${t.source}`}
           onPointClick={t => select(t.id)}

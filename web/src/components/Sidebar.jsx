@@ -10,13 +10,15 @@ const TABS = [
 
 function subtitle(t) {
   switch (t.type) {
-    case 'aircraft': return `${t.from}→${t.to} · FL${Math.round(t.altitude / 100)}`;
-    case 'ship': return `${t.destination} · ${t.speed.toFixed(1)}kt`;
+    case 'aircraft': return `FL${Math.round((t.altitude || 0) / 100)} · ${Math.round(t.speed || 0)}kt`;
+    case 'ship': return `${t.destination} · ${Number(t.speed).toFixed(1)}kt`;
     case 'satellite': return `${t.altitude}km · ${t.velocity}km/s`;
     case 'cctv': return `${t.status} · ${t.resolution}`;
     default: return '';
   }
 }
+
+const ROW_CAP = 150; // keep the DOM light when thousands are tracked
 
 export default function Sidebar() {
   const [tab, setTab] = useState('aircraft');
@@ -25,7 +27,8 @@ export default function Sidebar() {
   const select = useStore(s => s.select);
 
   const counts = tracks.reduce((a, t) => ((a[t.type] = (a[t.type] || 0) + 1), a), {});
-  const rows = tracks.filter(t => t.type === tab);
+  const allRows = tracks.filter(t => t.type === tab);
+  const rows = allRows.slice(0, ROW_CAP);
 
   return (
     <aside className="sidebar">
@@ -56,6 +59,10 @@ export default function Sidebar() {
             <span className="src">{t.source}</span>
           </div>
         ))}
+        {allRows.length > ROW_CAP && (
+          <div className="list-more">showing {ROW_CAP} of {allRows.length.toLocaleString()} — zoom the globe to explore the rest</div>
+        )}
+        {allRows.length === 0 && <div className="list-more">acquiring feed…</div>}
       </div>
     </aside>
   );
