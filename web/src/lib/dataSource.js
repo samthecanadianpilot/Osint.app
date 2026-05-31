@@ -26,16 +26,17 @@ export function startDataSource(store) {
     const fallbackToSim = () => {
       if (fallbackTriggered) return;
       fallbackTriggered = true;
-      console.log('Local OSINT backend not detected at ws://localhost:4000/ws. Initiating client-side simulation...');
+      console.log('Local OSINT backend not detected at ws://127.0.0.1:4000/ws. Initiating client-side simulation...');
       simCleanup = startSimulation(store);
     };
 
     try {
-      wsCleanup = startWebSocket(store, 'ws://localhost:4000/ws', () => {
+      // Connect to 127.0.0.1 directly to avoid loopback resolution delays on macOS
+      wsCleanup = startWebSocket(store, 'ws://127.0.0.1:4000/ws', () => {
         fallbackToSim();
       });
 
-      // If connection doesn't succeed or establish within 1.2 seconds, failover
+      // If connection doesn't succeed or establish within 4.5 seconds, failover
       const timer = setTimeout(() => {
         if (!store.getState().connected) {
           if (wsCleanup) {
@@ -44,7 +45,7 @@ export function startDataSource(store) {
           }
           fallbackToSim();
         }
-      }, 1200);
+      }, 4500);
 
       return () => {
         clearTimeout(timer);
