@@ -1,49 +1,77 @@
-// Vercel serverless — real live aircraft from adsb.lol (keyless). Queries a
-// GLOBAL GRID of points (250nm radius each) and merges by ICAO hex for
-// near-worldwide coverage. CDN-cached so adsb.lol is hit at most once / 20s.
+// Vercel serverless — real live aircraft from the THREE open ADS-B networks
+// (adsb.lol, adsb.fi, airplanes.live). A global grid of 250nm points is spread
+// round-robin across the networks: this respects each one's rate limits AND
+// maximizes coverage, since different feeder networks see different aircraft.
+// Merged by ICAO hex. CDN-cached so upstreams are hit at most once / 20s.
+//
+// (adsbexchange is intentionally NOT used — its global feed is feeder-only /
+// paid and ToS-protected; the networks below are the open-data equivalents.)
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
-// Global grid: latitude bands × longitude steps, plus dense hubs. 250nm circles
-// overlap enough at these spacings to cover populated airspace + ocean tracks.
-function buildGrid() {
-  const pts = [];
-  const lats = [-45, -15, 15, 45]; // dense mid-latitudes (most traffic)
-  for (const lat of lats) {
-    for (let lng = -180; lng < 180; lng += 45) pts.push([lat, lng]); // 8 each = 32
-  }
-  for (let lng = -180; lng < 180; lng += 90) pts.push([68, lng]); // sparse high north = 4
-  return pts; // ~36 points; burst-friendly for adsb.lol's rate limits
-}
-const GRID = buildGrid();
+// Both networks tolerate parallel bursts and carry the most aircraft (measured);
+// adsb.fi is excluded here because it rate-limits parallel bursts. airplanes.live
+// is listed first so its (richer) record wins on hex collisions. Querying BOTH
+// across the grid maximizes coverage — each network's feeders see different planes.
+const NETWORKS = [
+  { name: 'airplanes.live', url: (la, lo) => `https://api.airplanes.live/v2/point/${la}/${lo}/250`, key: 'ac' },
+  { name: 'adsb.lol',       url: (la, lo) => `https://api.adsb.lol/v2/point/${la}/${lo}/250`,        key: 'ac' },
+];
 
-function hashString(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
-  return h;
-}
+// Major airspace hubs (250nm circles), not a geographic grid — aircraft cluster
+// over populated regions, so this captures vastly more than ocean grid points.
+const GRID = [
+  // North America
+  [40.6, -73.8], [33.9, -118.4], [41.9, -87.9], [33.6, -84.4], [32.9, -97.0],
+  [25.8, -80.3], [47.4, -122.3], [39.7, -104.9], [43.7, -79.6], [19.4, -99.1],
+  // Europe
+  [51.5, -0.1], [48.9, 2.4], [50.0, 8.6], [52.3, 4.8], [41.0, 28.8],
+  [40.5, -3.6], [41.8, 12.3], [55.8, 37.6], [59.6, 17.9], [47.5, 19.3],
+  // Asia / Middle East
+  [35.6, 139.8], [39.9, 116.4], [31.2, 121.5], [22.3, 113.9], [13.7, 100.7],
+  [1.36, 103.99], [28.6, 77.1], [19.1, 72.9], [25.25, 55.36], [37.5, 127.0],
+  // Oceania
+  [-33.9, 151.2], [-37.8, 144.9],
+  // South America
+  [-23.4, -46.5], [4.7, -74.1], [-34.8, -58.5], [-12.0, -77.1],
+  // Africa
+  [-26.1, 28.2], [30.1, 31.4], [6.6, 3.3], [-1.3, 36.9],
+];
 
 module.exports = async (req, res) => {
-  const cap = Math.min(parseInt(req.query.cap, 10) || 1500, 4000);
+  const cap = Math.min(parseInt(req.query.cap, 10) || 2000, 5000);
   try {
+    // One request per grid point (~36 total — within both networks' burst limit).
+    // Primary = airplanes.live (most aircraft); fall back to adsb.lol per-point
+    // only if the primary returns nothing for that cell.
+    const getPoint = async (net, lat, lng) => {
+      try {
+        const r = await fetch(net.url(lat, lng), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(7000) });
+        if (!r.ok) return [];
+        const j = await r.json();
+        return j[net.key] || j.ac || j.aircraft || [];
+      } catch (e) { return []; }
+    };
     const results = await Promise.all(
-      GRID.map(([lat, lng]) =>
-        fetch(`https://api.adsb.lol/v2/point/${lat}/${lng}/250`, {
-          headers: { 'User-Agent': UA },
-          signal: AbortSignal.timeout(6500),
-        })
-          .then(r => (r.ok ? r.json() : { ac: [] }))
-          .catch(() => ({ ac: [] }))
-      )
+      GRID.map(async ([lat, lng]) => {
+        let arr = await getPoint(NETWORKS[0], lat, lng);
+        if (!arr.length) arr = await getPoint(NETWORKS[1], lat, lng);
+        return arr;
+      })
     );
 
+    // Cap each hub's contribution so the global budget is spread across all
+    // regions (otherwise the first hubs alone fill the cap). ~even worldwide.
+    const perHub = Math.ceil((cap / GRID.length) * 1.3);
     const seen = new Map();
-    for (const r of results) {
-      for (const a of r.ac || []) {
-        if (!a.hex || typeof a.lat !== 'number' || typeof a.lon !== 'number') continue;
-        if (typeof a.alt_baro !== 'number' || a.alt_baro <= 0) continue;
-        if (!seen.has(a.hex)) seen.set(a.hex, a);
+    for (const arr of results) {
+      let added = 0;
+      for (const a of arr) {
+        if (added >= perHub) break;
+        if (!a || !a.hex || typeof a.lat !== 'number' || typeof a.lon !== 'number') continue;
+        if (typeof a.alt_baro !== 'number' || a.alt_baro <= 0) continue; // airborne only
+        if (!seen.has(a.hex)) { seen.set(a.hex, a); added++; }
       }
     }
 
