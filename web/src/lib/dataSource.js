@@ -1,8 +1,10 @@
-// Single data-source abstraction. The rest of the app never knows whether
-// data comes from the live backend or the in-browser simulation.
+// Single data-source abstraction.
 //
-//   VITE_WS_URL set  → connect to the backend WebSocket  (Path A / local dev)
-//   VITE_WS_URL unset→ run the simulation in the browser  (Path B / Vercel)
+// Automatically detects and connects to a running local OSINT backend (ws://localhost:4000/ws)
+// when running locally, falling back gracefully to the browser simulation if the backend is offline.
+//
+//   VITE_WS_URL set  → connect to the explicitly configured backend WebSocket.
+//   VITE_WS_URL unset→ auto-connect to local backend first if local, else run simulation.
 //
 // Both modes drive the exact same store actions.
 import { createWorld } from './simulator.js';
@@ -10,7 +12,54 @@ import { createWorld } from './simulator.js';
 const WS_URL = import.meta.env.VITE_WS_URL; // e.g. ws://localhost:4000/ws
 
 export function startDataSource(store) {
-  if (WS_URL) return startWebSocket(store, WS_URL);
+  if (WS_URL) {
+    return startWebSocket(store, WS_URL);
+  }
+
+  // Auto-detect local backend if running in a local browser environment
+  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocal) {
+    let simCleanup = null;
+    let wsCleanup = null;
+    let fallbackTriggered = false;
+
+    const fallbackToSim = () => {
+      if (fallbackTriggered) return;
+      fallbackTriggered = true;
+      console.log('Local OSINT backend not detected at ws://localhost:4000/ws. Initiating client-side simulation...');
+      simCleanup = startSimulation(store);
+    };
+
+    try {
+      wsCleanup = startWebSocket(store, 'ws://localhost:4000/ws', () => {
+        fallbackToSim();
+      });
+
+      // If connection doesn't succeed or establish within 1.2 seconds, failover
+      const timer = setTimeout(() => {
+        if (!store.getState().connected) {
+          if (wsCleanup) {
+            wsCleanup();
+            wsCleanup = null;
+          }
+          fallbackToSim();
+        }
+      }, 1200);
+
+      return () => {
+        clearTimeout(timer);
+        if (wsCleanup) wsCleanup();
+        if (simCleanup) simCleanup();
+      };
+    } catch (e) {
+      fallbackToSim();
+      return () => {
+        if (simCleanup) simCleanup();
+      };
+    }
+  }
+
+  // Vercel / Remote production default to zero-server client simulation
   return startSimulation(store);
 }
 
@@ -34,23 +83,59 @@ function startSimulation(store) {
 }
 
 // ── Path A: live backend WebSocket ──
-function startWebSocket(store, url) {
+function startWebSocket(store, url, onFailed) {
   let ws, retry;
+  let hasOpened = false;
+  let closedCount = 0;
+
   const connect = () => {
-    ws = new WebSocket(url);
-    ws.onopen = () => store.getState().setConnected(true);
-    ws.onclose = () => {
-      store.getState().setConnected(false);
-      retry = setTimeout(connect, 2000); // auto-reconnect
-    };
-    ws.onmessage = e => {
-      const m = JSON.parse(e.data);
-      const s = store.getState();
-      if (m.type === 'snapshot') s.setSnapshot({ ...m, mode: 'live' });
-      else if (m.type === 'positions') s.applyPositions(m.tracks, m.tick);
-      else if (m.type === 'event') s.addEvent(m.event);
-    };
+    try {
+      ws = new WebSocket(url);
+      
+      ws.onopen = () => {
+        hasOpened = true;
+        store.getState().setConnected(true);
+      };
+      
+      ws.onclose = () => {
+        store.getState().setConnected(false);
+        if (!hasOpened) {
+          closedCount++;
+          if (closedCount >= 1 && onFailed) {
+            onFailed();
+            return;
+          }
+        }
+        retry = setTimeout(connect, 2500); // auto-reconnect
+      };
+      
+      ws.onerror = () => {
+        if (!hasOpened && onFailed) {
+          onFailed();
+        }
+      };
+
+      ws.onmessage = e => {
+        const m = JSON.parse(e.data);
+        const s = store.getState();
+        if (m.type === 'snapshot') s.setSnapshot({ ...m, mode: 'live' });
+        else if (m.type === 'positions') s.applyPositions(m.tracks, m.tick);
+        else if (m.type === 'event') s.addEvent(m.event);
+      };
+    } catch (err) {
+      if (onFailed) onFailed();
+    }
   };
+
   connect();
-  return () => { clearTimeout(retry); ws && ws.close(); };
+  return () => {
+    clearTimeout(retry);
+    if (ws) {
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close();
+    }
+  };
 }
