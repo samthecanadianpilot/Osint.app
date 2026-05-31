@@ -14,6 +14,7 @@ import { movePoint, KTS_TO_KMH } from './geo.js';
 
 const AIRCRAFT_COLOR = '#ff9f0a';
 const SAT_COLOR = '#34c759';
+const SHIP_COLOR = '#0a84ff';
 
 function computeArcs(tracks) {
   return tracks
@@ -28,12 +29,12 @@ function computeArcs(tracks) {
 export function startLive(store) {
   const s = () => store.getState();
 
-  // Ships + CCTV come from the seed world (no free global AIS feed).
+  // CCTV are static seed points. Ships now come live from /api/ships (Fintraffic AIS).
   const world = createWorld();
-  const ships = world.tracks.filter(t => t.type === 'ship');
   const cctv = world.tracks.filter(t => t.type === 'cctv');
 
   let aircraft = [];          // mapped from /api/aircraft
+  let ships = [];             // mapped from /api/ships (real AIS)
   let sats = [];              // { id, name, noradId, satrec, track }
 
   const all = () => [
@@ -45,11 +46,15 @@ export function startLive(store) {
 
   s().setSnapshot({
     tracks: all(),
-    arcs: computeArcs(ships),
-    feed: [{ ts: new Date().toISOString(), level: 'system', source: 'LIVE', message: 'Connecting to live ADS-B + orbital feeds…' }],
+    arcs: [],
+    feed: [{ ts: new Date().toISOString(), level: 'system', source: 'LIVE', message: 'Connecting to live ADS-B + AIS + orbital feeds…' }],
     mode: 'live',
   });
   s().setConnected(true);
+
+  function refreshArcs() {
+    s().setArcs(computeArcs([...aircraft, ...ships]));
+  }
 
   async function loadAircraft() {
     try {
@@ -57,8 +62,20 @@ export function startLive(store) {
       const j = await r.json();
       if (Array.isArray(j.aircraft)) {
         aircraft = j.aircraft.map(a => ({ ...a, color: AIRCRAFT_COLOR }));
-        s().setArcs(computeArcs([...aircraft, ...ships]));
+        refreshArcs();
         s().addEvent({ ts: new Date().toISOString(), level: 'track', source: 'ADS-B', message: `Refreshed flight vectors: ${aircraft.length} live aircraft tracked.` });
+      }
+    } catch (e) { /* keep last good set */ }
+  }
+
+  async function loadShips() {
+    try {
+      const r = await fetch('/api/ships');
+      const j = await r.json();
+      if (Array.isArray(j.ships)) {
+        ships = j.ships.map(v => ({ ...v, color: SHIP_COLOR }));
+        refreshArcs();
+        s().addEvent({ ts: new Date().toISOString(), level: 'track', source: 'AIS', message: `Maritime update: ${ships.length} live vessels (${j.region || 'AIS'}).` });
       }
     } catch (e) { /* keep last good set */ }
   }
@@ -77,8 +94,10 @@ export function startLive(store) {
   }
 
   loadAircraft();
+  loadShips();
   loadSats();
-  const refetch = setInterval(loadAircraft, 30000);
+  const refetchAir = setInterval(loadAircraft, 30000);
+  const refetchShips = setInterval(loadShips, 45000);
 
   let tick = 0;
   const timer = setInterval(() => {
@@ -129,5 +148,5 @@ export function startLive(store) {
     }
   }, 1000);
 
-  return () => { clearInterval(timer); clearInterval(refetch); };
+  return () => { clearInterval(timer); clearInterval(refetchAir); clearInterval(refetchShips); };
 }

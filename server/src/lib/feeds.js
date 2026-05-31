@@ -26,6 +26,25 @@ function hashString(str) {
   return hash;
 }
 
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+// AIS ship-type code → human label.
+function shipTypeLabel(code) {
+  if (code >= 60 && code <= 69) return 'Passenger';
+  if (code >= 70 && code <= 79) return 'Cargo';
+  if (code >= 80 && code <= 89) return 'Tanker';
+  if (code === 30) return 'Fishing';
+  if (code === 31 || code === 32 || code === 52) return 'Tug';
+  if (code === 36) return 'Sailing';
+  if (code === 37) return 'Pleasure Craft';
+  if (code >= 40 && code <= 49) return 'High-Speed Craft';
+  if (code === 50) return 'Pilot';
+  if (code === 51) return 'Search & Rescue';
+  if (code === 55) return 'Law Enforcement';
+  return 'Vessel';
+}
+
 // Famous satellites to track via Celestrak TLEs + satellite.js SGP4 propagation
 const SATELLITE_CATALOG = [
   { id: 'ST-25544', name: 'ISS (ZARYA)', noradId: 25544 },
@@ -263,24 +282,89 @@ export class FeedsManager {
     this.timers.push(flightTimer);
   }
 
-  // ── MARITIME AIS STREAM (AISStream.io API) ──
+  // ── MARITIME AIS ──
+  // Keyless real AIS via Fintraffic (digitraffic.fi, Baltic / Gulf of Finland)
+  // by default; global AISStream.io if an API key is provided.
   initMaritime() {
-    const apiKey = process.env.AISSTREAM_API_KEY;
-
-    if (!apiKey) {
-      this.store.pushEvent({ 
-        level: 'system', 
-        source: 'AIS', 
-        message: 'No AISSTREAM_API_KEY detected. Running high-fidelity maritime simulation.' 
-      });
-      // Fallback: Store already handles moving simulated ships smoothly. We don't overwrite them.
-      return;
+    // Drop the seed/mock ships so only real vessels are shown.
+    for (const [id, t] of this.store.tracks.entries()) {
+      if (t.type === 'ship') this.store.tracks.delete(id);
     }
 
-    this.store.pushEvent({ 
-      level: 'info', 
-      source: 'AIS', 
-      message: 'Connecting to live global ship transponder feed via AISStream.io...' 
+    const apiKey = process.env.AISSTREAM_API_KEY;
+    if (apiKey) {
+      this.initAISStream(apiKey);
+    } else {
+      this.initDigitraffic();
+    }
+  }
+
+  // Keyless real AIS — Fintraffic open data.
+  initDigitraffic() {
+    this.store.pushEvent({ level: 'info', source: 'AIS', message: 'Connecting to Fintraffic open AIS (digitraffic.fi)…' });
+
+    const fetchAIS = async () => {
+      try {
+        const headers = { 'Accept-Encoding': 'gzip', 'User-Agent': BROWSER_UA };
+        const [loc, vessels] = await Promise.all([
+          fetch('https://meri.digitraffic.fi/api/ais/v1/locations', { headers }).then(r => r.json()),
+          fetch('https://meri.digitraffic.fi/api/ais/v1/vessels', { headers }).then(r => r.json()).catch(() => []),
+        ]);
+
+        const meta = new Map();
+        for (const v of Array.isArray(vessels) ? vessels : []) meta.set(v.mmsi, v);
+
+        const ships = [];
+        const seen = new Set();
+        for (const f of loc.features || []) {
+          const mmsi = f.mmsi;
+          const p = f.properties || {};
+          const coords = f.geometry && f.geometry.coordinates;
+          if (!coords || seen.has(mmsi)) continue;
+          const sog = p.sog;
+          if (typeof sog !== 'number' || sog <= 1 || sog > 60) continue;
+          const m = meta.get(mmsi);
+          if (!m || !m.name || !m.name.trim()) continue;
+          seen.add(mmsi);
+          const [lng, lat] = coords;
+          const cog = typeof p.cog === 'number' ? p.cog : 90;
+          const r = Math.cos((lat * Math.PI) / 180) || 0.5;
+          ships.push({
+            id: `SH-${mmsi}`, name: m.name.trim(), mmsi: String(mmsi),
+            shipType: shipTypeLabel(m.shipType), lat, lng,
+            speed: sog, heading: cog,
+            draught: m.draught ? +(m.draught / 10).toFixed(1) : 0,
+            destination: (m.destination || '').trim() || 'AT SEA',
+            route: [[lng, lat], [lng + (Math.sin((cog * Math.PI) / 180) * 3) / r, lat + Math.cos((cog * Math.PI) / 180) * 3]],
+            source: 'AIS', type: 'ship',
+          });
+          if (ships.length >= 45) break;
+        }
+
+        if (ships.length) {
+          const activeIds = new Set(ships.map(s => s.id));
+          for (const [id, t] of this.store.tracks.entries()) {
+            if (t.type === 'ship' && !activeIds.has(id)) this.store.tracks.delete(id);
+          }
+          this.store.updateTracks(ships);
+          this.store.pushEvent({ level: 'track', source: 'AIS', message: `Maritime update: ${ships.length} live vessels (Baltic/Gulf of Finland).` });
+        }
+      } catch (err) {
+        console.error('digitraffic AIS error:', err.message);
+      }
+    };
+
+    fetchAIS();
+    const t = setInterval(fetchAIS, 30000);
+    this.timers.push(t);
+  }
+
+  // Global AIS via AISStream.io (requires AISSTREAM_API_KEY).
+  initAISStream(apiKey) {
+    this.store.pushEvent({
+      level: 'info',
+      source: 'AIS',
+      message: 'Connecting to live global ship transponder feed via AISStream.io...'
     });
 
     const connectAIS = () => {
