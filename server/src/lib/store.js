@@ -25,6 +25,45 @@ class TrackStore extends EventEmitter {
     this.feed = [];
     this.tick = 0;
     this.startedAt = new Date().toISOString();
+    this.isLive = false;
+  }
+
+  enableLiveMode() {
+    this.isLive = true;
+    // Clear initial mock/simulated aircraft and satellites so live data flows cleanly
+    for (const [id, t] of this.tracks.entries()) {
+      if (t.type === 'aircraft' || t.type === 'satellite') {
+        this.tracks.delete(id);
+      }
+    }
+  }
+
+  updateTrack(track) {
+    const existing = this.tracks.get(track.id);
+    this.tracks.set(track.id, {
+      ...existing,
+      ...track,
+      color: LAYER_COLORS[track.type] || track.color
+    });
+  }
+
+  updateTracks(tracksList) {
+    if (tracksList.length === 0) return;
+    
+    // Purge old live aircraft that aren't in the active OpenSky set
+    const isFlightUpdate = tracksList[0].type === 'aircraft';
+    if (isFlightUpdate) {
+      const activeIds = new Set(tracksList.map(t => t.id));
+      for (const [id, t] of this.tracks.entries()) {
+        if (t.type === 'aircraft' && t.source === 'ADS-B' && !activeIds.has(id)) {
+          this.tracks.delete(id);
+        }
+      }
+    }
+
+    for (const t of tracksList) {
+      this.updateTrack(t);
+    }
   }
 
   list(type) {
@@ -67,6 +106,11 @@ class TrackStore extends EventEmitter {
       if (t.type === 'cctv') continue; // CCTV is fixed
 
       if (t.type === 'satellite') {
+        if (this.isLive) {
+          // Real satellites are propagated dynamically in real-time in feeds.js
+          moved.push(t);
+          continue;
+        }
         // Satellites sweep eastward; ground-track longitude advances with orbital period.
         const degPerSec = 360 / ((t.period || 95) * 60);
         t.lng = ((t.lng + degPerSec * dtSeconds + 540) % 360) - 180;
@@ -97,21 +141,28 @@ class TrackStore extends EventEmitter {
     const samples = this.list().filter(t => t.type !== 'cctv');
     if (!samples.length) return;
     const t = samples[this.tick % samples.length];
+    
+    // Ensure all formats are perfectly safe against missing real-life transponder metrics
+    const alt = t.altitude || 0;
+    const spd = t.speed || 0;
+    const hdg = t.heading || 0;
+    const vel = t.velocity || 7.6;
+    
     const kinds = {
       aircraft: [
-        `${t.callsign} cruising FL${Math.round(t.altitude / 100)} @ ${Math.round(t.speed)}kt`,
-        `${t.callsign} heading ${Math.round(t.heading)}° — ${t.from}→${t.to}`,
-        `ADS-B contact refreshed: ${t.callsign} (${t.registration})`,
+        `${t.callsign || 'Flight'} cruising FL${Math.round(alt / 100)} @ ${Math.round(spd)}kt`,
+        `${t.callsign || 'Flight'} heading ${Math.round(hdg)}° — ${t.from || 'N/A'}→${t.to || 'N/A'}`,
+        `ADS-B contact refreshed: ${t.callsign || 'Flight'} (${t.registration || 'N/A'})`,
       ],
       ship: [
-        `${t.name} SOG ${t.speed.toFixed(1)}kt → ${t.destination}`,
-        `AIS position report: ${t.name} (MMSI ${t.mmsi})`,
-        `${t.name} on course ${Math.round(t.heading)}°`,
+        `${t.name || 'Vessel'} SOG ${parseFloat(spd).toFixed(1)}kt → ${t.destination || 'PORT'}`,
+        `AIS position report: ${t.name || 'Vessel'} (MMSI ${t.mmsi || 'N/A'})`,
+        `${t.name || 'Vessel'} on course ${Math.round(hdg)}°`,
       ],
       satellite: [
-        `${t.name} ground track over ${t.lat.toFixed(1)}, ${t.lng.toFixed(1)}`,
-        `TLE propagated: ${t.name} alt ${t.altitude}km`,
-        `${t.name} velocity ${t.velocity}km/s`,
+        `${t.name || 'Satellite'} ground track over ${(t.lat || 0).toFixed(1)}, ${(t.lng || 0).toFixed(1)}`,
+        `TLE propagated: ${t.name || 'Satellite'} alt ${alt}km`,
+        `${t.name || 'Satellite'} velocity ${vel}km/s`,
       ],
     };
     const msgs = kinds[t.type];

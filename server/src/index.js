@@ -7,6 +7,7 @@ import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { store } from './lib/store.js';
 import { api } from './routes/api.js';
+import { FeedsManager } from './lib/feeds.js';
 
 const PORT = process.env.PORT || 4000;
 
@@ -33,13 +34,24 @@ function broadcast(payload) {
 
 wss.on('connection', ws => {
   // Send a snapshot so new clients render immediately.
-  ws.send(JSON.stringify({ type: 'snapshot', tracks: store.list(), arcs: store.arcs(), feed: store.feed }));
+  ws.send(JSON.stringify({
+    type: 'snapshot',
+    tracks: store.list(),
+    arcs: store.arcs(),
+    feed: store.feed,
+    mode: store.isLive ? 'live' : 'sim'
+  }));
 });
 
 store.on('positions', moved =>
   broadcast({ type: 'positions', tick: store.tick, tracks: moved })
 );
 store.on('event', event => broadcast({ type: 'event', event }));
+
+// Enable real-life global tracking feeds by default!
+store.enableLiveMode();
+const feeds = new FeedsManager(store);
+feeds.start();
 
 store.startSimulation(1000);
 
@@ -50,6 +62,7 @@ server.listen(PORT, () => {
 });
 
 const shutdown = () => {
+  feeds.stop();
   store.stopSimulation();
   server.close(() => process.exit(0));
 };
