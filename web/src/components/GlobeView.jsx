@@ -19,6 +19,7 @@ export default function GlobeView() {
   const arcs = useStore(visibleArcs);
   const selected = useStore(selectedTrack);
   const select = useStore(s => s.select);
+  const [hover, setHover] = useState(null); // { x, y, label, sub }
 
   // Size the canvas to its container.
   useEffect(() => {
@@ -34,9 +35,9 @@ export default function GlobeView() {
     if (!g) return;
     const c = g.controls();
     c.autoRotate = true;
-    c.autoRotateSpeed = 0.3;
+    c.autoRotateSpeed = 0.28;
     c.enableDamping = true;
-    g.pointOfView({ lat: 25, lng: 10, altitude: 2.4 }, 0);
+    g.pointOfView({ lat: 30, lng: 0, altitude: 1.9 }, 0);
   }, [dim.w]);
 
   // Set up the custom track renderer once the globe is ready, wire it to the
@@ -61,7 +62,13 @@ export default function GlobeView() {
       rendererRef.current = renderer;
       if (typeof window !== 'undefined') window.__globe = g; // debug/inspection handle
 
-      const pushUpdate = () => renderer.update(visibleTracks(useStore.getState()));
+      let lastTles = null;
+      const pushUpdate = () => {
+        const st = useStore.getState();
+        renderer.update(visibleTracks(st));
+        renderer.setSatVisible(!!st.filters.satellite);
+        if (st.tles !== lastTles) { lastTles = st.tles; renderer.setSatelliteTLEs(st.tles); }
+      };
       pushUpdate();
       const unsub = useStore.subscribe(pushUpdate);
 
@@ -85,10 +92,33 @@ export default function GlobeView() {
       dom.addEventListener('pointerdown', onDown);
       dom.addEventListener('pointerup', onUp);
 
+      // hover labels (throttled raycast)
+      let lastMove = 0;
+      const onMove = e => {
+        const t = performance.now();
+        if (t - lastMove < 60) return;
+        lastMove = t;
+        const r = dom.getBoundingClientRect();
+        const ndc = { x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -((e.clientY - r.top) / r.height) * 2 + 1 };
+        const id = renderer.pick(ndc, g.camera());
+        if (!id) { setHover(h => (h ? null : h)); dom.style.cursor = 'grab'; return; }
+        const tr = useStore.getState().byId[id];
+        if (!tr) return;
+        dom.style.cursor = 'pointer';
+        const sub = tr.type === 'aircraft'
+          ? `${Math.round(tr.altitude || 0).toLocaleString()} ft · ${Math.round(tr.speed || 0)} kt`
+          : tr.type === 'ship' ? `${tr.shipType || 'Vessel'} · ${Number(tr.speed || 0).toFixed(1)} kt`
+          : tr.type === 'satellite' ? `${tr.altitude} km · ${tr.velocity} km/s`
+          : tr.source || '';
+        setHover({ x: e.clientX - r.left, y: e.clientY - r.top, label: tr.callsign || tr.name, sub });
+      };
+      dom.addEventListener('pointermove', onMove);
+
       cleanup = () => {
         unsub();
         dom.removeEventListener('pointerdown', onDown);
         dom.removeEventListener('pointerup', onUp);
+        dom.removeEventListener('pointermove', onMove);
         renderer.dispose();
         rendererRef.current = null;
       };
@@ -114,6 +144,13 @@ export default function GlobeView() {
         </div>
       )}
       <div className="globe-hint">DRAG TO ROTATE · SCROLL TO ZOOM · CLICK AN ICON</div>
+
+      {hover && (
+        <div className="globe-tip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
+          <b>{hover.label}</b>
+          {hover.sub && <span>{hover.sub}</span>}
+        </div>
+      )}
 
       <button className="globe-toggle" onClick={() => setMode(m => (m === 'night' ? 'day' : 'night'))} title="Toggle Earth texture">
         {mode === 'night' ? '◐ DAY' : '◑ NIGHT'}

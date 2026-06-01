@@ -47,7 +47,14 @@ export const useStore = create((set, get) => ({
     set({ tracks, byId: Object.fromEntries(tracks.map(t => [t.id, t])) }),
 
   setArcs: arcs => set({ arcs }),
+
+  tles: [],
+  setTLEs: tles => set({ tles }),
+  satCount: 0,
+  setSatCount: satCount => set({ satCount }),
 }));
+
+if (typeof window !== 'undefined') window.__store = useStore; // debug/inspection handle
 
 // ── selectors ──
 export const visibleTracks = s => s.tracks.filter(t => s.filters[t.type]);

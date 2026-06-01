@@ -25,6 +25,7 @@ export default function TopBar() {
   const toggleFilter = useStore(s => s.toggleFilter);
   const mode = useStore(s => s.mode);
   const connected = useStore(s => s.connected);
+  const total = useStore(s => s.tracks.length + s.satCount);
   const utc = useUTC();
 
   const live = mode === 'live' && connected;
@@ -53,6 +54,7 @@ export default function TopBar() {
       </div>
 
       <div className="status">
+        <span className="tracking">{total.toLocaleString()} TRACKED</span>
         <span className={`conn${live ? '' : ' sim'}`}>
           <span className="d" />
           {live ? 'LIVE FEED' : 'LOCAL SIM'}

@@ -26,7 +26,9 @@ export default function Sidebar() {
   const selectedId = useStore(s => s.selectedId);
   const select = useStore(s => s.select);
 
+  const satCount = useStore(s => s.satCount);
   const counts = tracks.reduce((a, t) => ((a[t.type] = (a[t.type] || 0) + 1), a), {});
+  counts.satellite = satCount; // satellites render via worker, not the track list
   const allRows = tracks.filter(t => t.type === tab);
   const rows = allRows.slice(0, ROW_CAP);
 
@@ -62,7 +64,10 @@ export default function Sidebar() {
         {allRows.length > ROW_CAP && (
           <div className="list-more">showing {ROW_CAP} of {allRows.length.toLocaleString()} — zoom the globe to explore the rest</div>
         )}
-        {allRows.length === 0 && <div className="list-more">acquiring feed…</div>}
+        {tab === 'satellite' && (
+          <div className="list-more">{satCount.toLocaleString()} satellites propagated live (SGP4) — rendered on the globe, too many to list</div>
+        )}
+        {tab !== 'satellite' && allRows.length === 0 && <div className="list-more">acquiring feed…</div>}
       </div>
     </aside>
   );

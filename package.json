@@ -1,0 +1,8 @@
+{
+  "name": "osint-central-functions",
+  "private": true,
+  "description": "Dependencies for Vercel serverless functions in /api",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

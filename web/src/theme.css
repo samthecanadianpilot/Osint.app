@@ -60,6 +60,7 @@ body{
 .filt.off .sw{background:var(--ink-3)!important;box-shadow:none!important}
 
 .status{display:flex;align-items:center;gap:18px;font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.tracking{font-family:var(--mono);font-size:11px;color:var(--ink-2);letter-spacing:.06em}
 .conn{display:inline-flex;align-items:center;gap:7px}
 .conn .d{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1.8s infinite}
 .conn.sim .d{background:var(--amber);box-shadow:0 0 8px var(--amber)}
@@ -110,6 +111,9 @@ body{
   border:1px solid var(--line);transition:all .15s;
 }
 .globe-toggle:hover{color:var(--ink);border-color:var(--ink-3)}
+.globe-tip{position:absolute;z-index:7;pointer-events:none;background:rgba(8,11,16,.92);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-family:var(--mono);font-size:11px;color:var(--ink);max-width:220px;box-shadow:0 6px 20px rgba(0,0,0,.5)}
+.globe-tip b{display:block;font-weight:600;letter-spacing:.02em}
+.globe-tip span{display:block;color:var(--ink-3);font-size:10px;margin-top:2px}
 
 /* ── RIGHT PANEL ── */
 .panel{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}

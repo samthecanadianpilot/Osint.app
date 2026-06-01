@@ -10,11 +10,13 @@ const FALLBACK = [
 ];
 
 module.exports = async (req, res) => {
-  const cap = Math.min(parseInt(req.query.cap, 10) || 1800, 5000);
+  const cap = Math.min(parseInt(req.query.cap, 10) || 20000, 25000);
   let satellites = [];
+  let ok = false;
   try {
     const r = await fetch('https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle', {
       headers: { 'Accept-Encoding': 'gzip', 'User-Agent': UA },
+      signal: AbortSignal.timeout(20000),
     });
     const text = await r.text();
     const lines = text.split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.length > 0);
@@ -37,11 +39,13 @@ module.exports = async (req, res) => {
     } else {
       satellites = parsed;
     }
+    ok = satellites.length > 10;
   } catch (e) {
     satellites = FALLBACK;
   }
   if (!satellites.length) satellites = FALLBACK;
 
-  res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
+  // Only cache real catalogs — never poison the CDN with a fallback/failure.
+  res.setHeader('Cache-Control', ok ? 's-maxage=3600, stale-while-revalidate=7200' : 'no-store');
   res.status(200).json({ satellites, count: satellites.length });
 };
