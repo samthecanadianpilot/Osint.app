@@ -4,7 +4,8 @@
   "outputDirectory": "web/dist",
   "functions": {
     "api/tle.js": { "maxDuration": 30 },
-    "api/ships.js": { "maxDuration": 15 }
+    "api/ships.js": { "maxDuration": 15 },
+    "api/aircraft.js": { "maxDuration": 30 }
   },
   "rewrites": [{ "source": "/((?!api).*)", "destination": "/index.html" }]
 }

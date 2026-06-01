@@ -3,6 +3,7 @@
   "private": true,
   "description": "Dependencies for Vercel serverless functions in /api",
   "dependencies": {
+    "undici": "^6.21.0",
     "ws": "^8.18.0"
   }
 }
